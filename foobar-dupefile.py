@@ -34,23 +34,36 @@ def load_environment():
         if not target_path:
             target_path = os.path.join(os.getcwd(), 'original_files')
     
-    return source_path, action, target_path
+    # 获取是否处理不同后缀的文件
+    handle_different_extensions = os.getenv('HANDLE_DIFFERENT_EXTENSIONS', 'false').lower() == 'true'
+    
+    # 获取要处理的后缀名（不包含点号）
+    target_extension = os.getenv('TARGET_EXTENSION', '').lower()
+    
+    return source_path, action, target_path, handle_different_extensions, target_extension
 
-def find_duplicate_pairs(file_path: Path) -> tuple[bool, Union[Path, None]]:
+def find_duplicate_pairs(file_path: Path, handle_different_extensions: bool, target_extension: str) -> tuple[bool, Union[Path, None]]:
     """
-    检查文件是否有对应的(1)版本文件
-    返回元组：(是否找到(1)版本, (1)版本文件路径如果存在)
+    检查文件是否有同名但不同后缀的文件
+    返回元组：(是否找到同名文件, 另一个文件的路径如果存在)
     """
     name = file_path.stem
-    suffix = file_path.suffix
+    suffix = file_path.suffix.lower()[1:]  # 去掉点号的后缀
+    parent = file_path.parent
     
-    # 构造(1)版本的文件名
-    duplicate_name = f"{name} (1){suffix}"
-    duplicate_path = file_path.parent / duplicate_name
-    
-    # 检查(1)版本是否存在
-    if duplicate_path.exists():
-        return True, duplicate_path
+    if handle_different_extensions and target_extension:
+        # 只处理目标后缀的文件
+        if suffix == target_extension:
+            # 查找同名但后缀不同的文件
+            for other_file in parent.iterdir():
+                if other_file.stem == name and other_file.suffix.lower()[1:] != target_extension:
+                    return True, other_file
+    else:
+        # 原有逻辑，匹配带(1)的文件
+        duplicate_name = f"{name} (1){file_path.suffix}"
+        duplicate_path = parent / duplicate_name
+        if duplicate_path.exists():
+            return True, duplicate_path
     
     return False, None
 
@@ -71,11 +84,9 @@ def handle_file(file_path: Path, duplicate_path: Path, action: str, target_path:
             
             shutil.move(str(file_path), str(new_target / file_path.name))
             logging.info(f"Moved original file: {file_path} -> {new_target / file_path.name}")
-
-        # 重命名(1)版本文件为原始文件名
-        duplicate_path.rename(file_path)
-        logging.info(f"Renamed duplicate file: {duplicate_path} -> {file_path}")
-
+        
+        logging.info(f"Kept file: {duplicate_path}")
+    
     except Exception as e:
         logging.error(f"Error handling file {file_path}: {str(e)}")
         raise
@@ -87,8 +98,10 @@ def process_directory():
     
     try:
         # 加载环境变量
-        source_path, action, target_path = load_environment()
-        logging.info(f"Configuration loaded - Source: {source_path}, Action: {action}, Target: {target_path}")
+        source_path, action, target_path, handle_different_extensions, target_extension = load_environment()
+        logging.info(f"Configuration loaded - Source: {source_path}, Action: {action}, "
+                    f"Target: {target_path}, Handle Different Extensions: {handle_different_extensions}, "
+                    f"Target Extension: {target_extension}")
         
         # 收集所有需要处理的文件
         files_to_process = []
@@ -97,11 +110,11 @@ def process_directory():
                 file_path = Path(root) / file
                 # 只处理不带(1)的文件
                 if not file_path.stem.endswith(' (1)'):
-                    has_duplicate, duplicate_path = find_duplicate_pairs(file_path)
+                    has_duplicate, duplicate_path = find_duplicate_pairs(file_path, handle_different_extensions, target_extension)
                     if has_duplicate:
                         files_to_process.append((file_path, duplicate_path))
-                        logging.info(f"Found file pair: Original: {file_path}, Duplicate: {duplicate_path}")
-
+                        logging.info(f"Found file pair: Original: {file_path}, Keep: {duplicate_path}")
+        
         # 处理收集到的文件
         for original_path, duplicate_path in files_to_process:
             handle_file(original_path, duplicate_path, action, target_path)
